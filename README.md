@@ -1,4 +1,4 @@
-## fe2: Frontier: Elite 2 savegames encoder - decoded.
+## fe2: Frontier: Elite 2 savegames encoder - decoder.
 
 This is a simple command line to decrypt and reencrypt samegames from fe2 the Atari and Amiga version.
 It also works with [Final Frontier, the linux 64bits port of the game](https://github.com/lee-b/final-frontier) or [glfrontier for DOS/Windows](https://github.com/pcercuei/glfrontier)
