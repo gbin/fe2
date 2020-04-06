@@ -34,7 +34,7 @@ def crypt(src: bytes, key: int, decrypt: bool) -> (bytearray, int):
     return output, key
 
 
-def _decomp(output: bytearray, src, i, final_length, ground_truth: bytearray = None) -> int:
+def _decompress(output: bytearray, src: bytearray, i : int, final_length : int, ground_truth: bytearray = None) -> int:
     init_length = len(output)
     while len(output) - init_length < final_length and i < len(src):
         output.append(src[i])
@@ -64,10 +64,49 @@ def _decomp(output: bytearray, src, i, final_length, ground_truth: bytearray = N
     return i
 
 
+def _compress(output: bytearray, src: bytearray, src_offset: int, length: int, ground_truth: bytearray = None) -> bytearray:
+    i = src_offset
+    while i - src_offset < length:
+        b = src[i]
+        i += 1
+        output.append(b)
+        if ground_truth and output[-1] != ground_truth[len(output)-1]:
+            error(f'copy compress at {length:x}', src_offset+i-1, b, len(output)-1, ground_truth[len(output)-1])
+
+        if b == 0:
+            count = 0
+            while src[i] == 0 and count <= 254:
+                i += 1
+                if i - src_offset == length + 2:  # This is a bug in the original code off by 2
+                    break
+                count += 1
+            output.append(count)
+
+            if ground_truth and output[-1] != ground_truth[len(output)-1]:
+                error(f'zero compress at {length:x}', src_offset+i-1, count, len(output)-1, ground_truth[len(output)-1])
+
+
+def compress(src: bytearray, ground_truth: bytearray = None) -> bytearray:
+    output = bytearray()
+    _compress(output, src, 0, 0x80ed, ground_truth=ground_truth)
+    i = 0x80ee
+    for j in range(0x20C): # off by ones EVERYWHERE!!!
+        output.append(src[i])
+        i += 1
+        output_offset = len(output)-1
+        if ground_truth and output[-1] != ground_truth[output_offset]:
+            error('0x20B copy', i, src[i], output_offset, ground_truth[output_offset])
+
+    _compress(output, src, i, 0x3661, ground_truth=ground_truth)
+    if len(output) % 2:
+        output.append(0xe5)  # yeah this crap just takes a random byte from memory
+    return output
+
+
 def decompress(src: bytearray, ground_truth: bytearray = None) -> bytearray:
     output = bytearray()
     i = 0
-    i = _decomp(output, src, i, 0x80ed, ground_truth=ground_truth)
+    i = _decompress(output, src, i, 0x80ed, ground_truth=ground_truth)
     for j in range(0x20B):
         output.append(src[i])
         i += 1
@@ -76,7 +115,7 @@ def decompress(src: bytearray, ground_truth: bytearray = None) -> bytearray:
             error('0x20B copy', i, src[i], output_offset, ground_truth[output_offset])
     i -= 1  # This feels like a bug in the original code.
 
-    _decomp(output, src, i, 0x3661, ground_truth=ground_truth)
+    _decompress(output, src, i, 0x3661, ground_truth=ground_truth)
     return output
 
 
@@ -102,25 +141,29 @@ def decrypt_file(src_file: str, dst_file: str = None, testmode: bool = False):
             print(f'Incorrect footer. {key:x} instead of {last_value:x}')
 
 
-def encrypt_file(src_file: str, dst_file: str):
+def encrypt_file(src_file: str, dst_file: str, testmode: bool = False):
     src = open(src_file, mode='rb').read()
 
-    with open(dst_file, mode='wb') as encrypted:
+    with open(dst_file, mode='rb' if testmode else 'wb') as encrypted:
         # Magic == 00 11
         #
-        encrypted.write(struct.pack('>H', 0x11))
-        data, key = crypt(src, HARDCODED_KEY, decrypt=False)
-        encrypted.write(data)
+        if not testmode:
+            encrypted.write(struct.pack('>H', 0x11))
+        data = compress(src, encrypted.read() if testmode else None)
+        data, key = crypt(data, HARDCODED_KEY, decrypt=False)
+        if not testmode:
+            encrypted.write(data)
 
-        # Footer == Last Key
-        encrypted.write(struct.pack('>I', key))
+            # Footer == Last Key
+            encrypted.write(struct.pack('>I', key))
 
 
 @click.command()
 @click.option('--decrypt', '-d', 'action', flag_value='decrypt', default=True,
               help='Decrypt the savegame to clear binary.')
 @click.option('--encrypt', '-e', 'action', flag_value='encrypt', help='Encrypt back a savegame.')
-@click.option('--test', '-t', 'action', flag_value='test', help='Test the encryption decryption with a ground truth from amiSGE.')
+@click.option('--testdec', '-t', 'action', flag_value='testdec', help='Test the decryption with a ground truth from amiSGE.')
+@click.option('--testenc', '-T', 'action', flag_value='testenc', help='Test the encryption with a ground truth from amiSGE.')
 @click.argument('srcfile', type=click.Path())
 @click.argument('dstfile', type=click.Path())
 def main(action: str, srcfile: str, dstfile: str):
@@ -128,8 +171,10 @@ def main(action: str, srcfile: str, dstfile: str):
         decrypt_file(srcfile, dstfile)
     elif action == 'encrypt':
         encrypt_file(srcfile, dstfile)
-    elif action == 'test':
+    elif action == 'testdec':
         decrypt_file(srcfile, dstfile, testmode=True)
+    elif action == 'testenc':
+        encrypt_file(srcfile, dstfile, testmode=True)
 
 
 if __name__ == '__main__':
